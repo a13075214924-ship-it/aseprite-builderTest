@@ -32,12 +32,11 @@ jobs:
     needs: fetch-aseprite-info
     permissions:
       contents: write
-    outputs:
-      download-link: ${{ needs.fetch-aseprite-info.outputs.download-link }}
-      release-tag: ${{ needs.fetch-aseprite-info.outputs.release-tag }}
+    # 移除 outputs，因为 create-release 不需要输出这些信息
     steps:
       - uses: actions/checkout@v2
-      - uses: ncipollo/release-action@v1
+      - name: Create Release
+        uses: ncipollo/release-action@v1
         with:
           tag: ${{ needs.fetch-aseprite-info.outputs.release-tag }}
           body: Aseprite-${{ needs.fetch-aseprite-info.outputs.release-tag }}
@@ -46,13 +45,13 @@ jobs:
 
   build-aseprite:
     name: Build Aseprite
-    needs: create-release
-    permissions:
-      contents: write
+    needs: [fetch-aseprite-info, create-release]  # 同时依赖两个 job
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write  # 确保有写入权限
     strategy:
         matrix:
-          os: [ windows-latest ]
+          os: [windows-latest]
         fail-fast: false
     steps:
       - name: Install Dependencies
@@ -64,11 +63,14 @@ jobs:
             libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
             libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
             libfontconfig1-dev
+      
       - uses: actions/checkout@v4
+      
       - name: Install Aseprite
         shell: bash
         run: |
-          git clone --recurse-submodules -j8 https://github.com/aseprite/aseprite --branch ${{ needs.create-release.outputs.release-tag }}
+          git clone --recurse-submodules -j8 https://github.com/aseprite/aseprite --branch ${{ needs.fetch-aseprite-info.outputs.release-tag }}  # 直接从 fetch job 获取 tag
+      
       - name: Install Skia
         working-directory: aseprite
         shell: bash
@@ -84,9 +86,12 @@ jobs:
             wget https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Linux-Release-x64.zip
             unzip Skia-Linux-Release-x64.zip -d skia
           fi
+      
       - uses: aseprite/get-ninja@main
+      
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
+      
       - name: Generating Makefiles
         shell: bash
         working-directory: aseprite
@@ -102,7 +107,7 @@ jobs:
           fi
 
           cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 \
             -DENABLE_TESTS=OFF \
             -DENABLE_SCRIPTING=$enable_scripting \
@@ -111,25 +116,30 @@ jobs:
             -DSKIA_DIR=$(realpath skia) \
             -DOPENSSL_USE_STATIC_LIBS=ON \
             -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
+      
       - name: Compiling
         shell: bash
         working-directory: aseprite
         run: |
           cd build && ninja
+      
       - name: Clean Up Build folder
         working-directory: aseprite/build/bin
         shell: bash
         run: find . -mindepth 1 ! \( -name 'aseprite' -o -name 'aseprite.exe' -o -name 'data' -prune \) -exec rm -rf {} +
+      
       - name: Make portable zip
         working-directory: aseprite/build/bin
         run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
-      - name: Create release
+      
+      - name: Create release archive
         working-directory: aseprite/build/bin
-        run: 7z -tzip a Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip *
+        run: 7z -tzip a Aseprite-${{ needs.fetch-aseprite-info.outputs.release-tag }}-${{ runner.os }}.zip *
+      
       - name: Upload release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: aseprite/build/bin/Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip
-          asset_name: Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip
-          tag: ${{ needs.create-release.outputs.release-tag }}
+          file: aseprite/build/bin/Aseprite-${{ needs.fetch-aseprite-info.outputs.release-tag }}-${{ runner.os }}.zip
+          asset_name: Aseprite-${{ needs.fetch-aseprite-info.outputs.release-tag }}-${{ runner.os }}.zip
+          tag: ${{ needs.fetch-aseprite-info.outputs.release-tag }}
